@@ -12,15 +12,14 @@ import re
 # قم بتحميل متغيرات البيئة من ملف .env
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# ****** الجديد: قراءة هوية المجموعة المسموح بها ******
-ALLOWED_GROUP_ID = os.getenv("ALLOWED_GROUP_ID") 
-# تحويل الـ ID إلى عدد صحيح للتأكد من استخدامه بشكل صحيح في الفلاتر
-try:
-    ALLOWED_GROUP_ID = int(ALLOWED_GROUP_ID)
-except (ValueError, TypeError):
-    logger.error("ALLOWED_GROUP_ID غير صالح. يرجى التحقق من ملف .env.")
-    ALLOWED_GROUP_ID = None
+OWNER_ID = os.getenv("OWNER_ID") 
 
+# تحويل الـ OWNER_ID إلى عدد صحيح
+try:
+    OWNER_ID = int(OWNER_ID)
+except (ValueError, TypeError):
+    logger.error("OWNER_ID غير صالح. يرجى التحقق من ملف .env.")
+    OWNER_ID = None
 
 # إعداد التسجيل
 logging.basicConfig(
@@ -30,15 +29,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 #==============================================================
-# قسم قاعدة البيانات (بدون تغيير)
+# قسم قاعدة البيانات
 #==============================================================
 
 def init_db():
     """يهيئ قاعدة البيانات وينشئ الجداول."""
-    # (نفس دالة init_db السابقة)
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
     
+    # جدول العدادات... (بدون تغيير)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS general_counts (
             user_id INTEGER PRIMARY KEY,
@@ -67,73 +66,52 @@ def init_db():
         )
     """)
     
-    conn.commit()
-    conn.close()
-
-def update_counts(user_id, username):
-    """يزيد عدد الرسائل للمستخدم في جميع الجداول."""
-    # (نفس دالة update_counts السابقة)
-    conn = sqlite3.connect('bot_data.db')
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "INSERT OR REPLACE INTO general_counts (user_id, username, count) VALUES (?, ?, COALESCE((SELECT count FROM general_counts WHERE user_id = ?), 0) + 1)",
-        (user_id, username, user_id)
-    )
-    cursor.execute(
-        "INSERT OR REPLACE INTO weekly_counts (user_id, username, count) VALUES (?, ?, COALESCE((SELECT count FROM weekly_counts WHERE user_id = ?), 0) + 1)",
-        (user_id, username, user_id)
-    )
-    cursor.execute(
-        "INSERT OR REPLACE INTO monthly_counts (user_id, username, count) VALUES (?, ?, COALESCE((SELECT count FROM monthly_counts WHERE user_id = ?), 0) + 1)",
-        (user_id, username, user_id)
-    )
-
-    conn.commit()
-    conn.close()
-
-def get_rank_and_count(table_name, user_id):
-    """يحصل على ترتيب المستخدم وعدد رسائله."""
-    # (نفس دالة get_rank_and_count السابقة)
-    conn = sqlite3.connect('bot_data.db')
-    cursor = conn.cursor()
+    # ****** الجديد: جدول لتخزين معرفات المجموعات المسموح بها ******
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS allowed_groups (
+            chat_id INTEGER PRIMARY KEY
+        )
+    """)
     
-    cursor.execute(f"SELECT count FROM {table_name} WHERE user_id = ?", (user_id,))
-    user_count = cursor.fetchone()
-    if not user_count:
+    conn.commit()
+    conn.close()
+
+def is_group_allowed(chat_id):
+    """يتحقق مما إذا كانت المجموعة مسموحاً بها في قاعدة البيانات."""
+    conn = sqlite3.connect('bot_data.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM allowed_groups WHERE chat_id = ?", (chat_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None
+
+def add_allowed_group(chat_id):
+    """يضيف معرف مجموعة إلى قائمة المجموعات المسموح بها."""
+    conn = sqlite3.connect('bot_data.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT OR IGNORE INTO allowed_groups (chat_id) VALUES (?)", (chat_id,))
+        conn.commit()
+        return cursor.rowcount > 0 # تعود True إذا تمت الإضافة، False إذا كانت موجودة
+    finally:
         conn.close()
-        return 0, 0
-    
-    cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE count > ?", (user_count[0],))
-    rank = cursor.fetchone()[0] + 1
-    
-    conn.close()
-    return user_count[0], rank
 
-def get_top_users(table_name, limit=5):
-    """يحصل على قائمة بأعلى المستخدمين."""
-    # (نفس دالة get_top_users السابقة)
-    conn = sqlite3.connect('bot_data.db')
-    cursor = conn.cursor()
-    
-    cursor.execute(f"SELECT username, count FROM {table_name} ORDER BY count DESC LIMIT ?", (limit,))
-    top_users = cursor.fetchall()
-    
-    conn.close()
-    return top_users
+# الدوال الأخرى (update_counts, get_rank_and_count, get_top_users, reset_counts)
+# تبقى كما هي بدون تغيير، لكن تم حذفها هنا للاختصار.
+# (يجب الإبقاء على الدوال في الكود الكامل لديك)
 
+# الدالة reset_counts (مُعدلة للأحد - 6)
 def reset_counts():
     """
     يتحقق من التاريخ لإعادة ضبط العدادات الأسبوعية (الأحد) والشهرية (اليوم الأول).
     """
-    # (نفس دالة reset_counts السابقة - تم ضبطها على الأحد 6)
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
     
     today = datetime.date.today()
     today_str = today.strftime('%Y-%m-%d')
     
-    # إعادة ضبط العدادات الأسبوعية (الأحد)
+    # إعادة ضبط العدادات الأسبوعية (الأحد = 6)
     if today.weekday() == 6:
         cursor.execute("SELECT last_reset_date FROM last_reset_dates WHERE type = 'weekly'")
         last_reset = cursor.fetchone()
@@ -154,23 +132,91 @@ def reset_counts():
     conn.commit()
     conn.close()
 
+def update_counts(user_id, username):
+    conn = sqlite3.connect('bot_data.db')
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "INSERT OR REPLACE INTO general_counts (user_id, username, count) VALUES (?, ?, COALESCE((SELECT count FROM general_counts WHERE user_id = ?), 0) + 1)",
+        (user_id, username, user_id)
+    )
+    cursor.execute(
+        "INSERT OR REPLACE INTO weekly_counts (user_id, username, count) VALUES (?, ?, COALESCE((SELECT count FROM weekly_counts WHERE user_id = ?), 0) + 1)",
+        (user_id, username, user_id)
+    )
+    cursor.execute(
+        "INSERT OR REPLACE INTO monthly_counts (user_id, username, count) VALUES (?, ?, COALESCE((SELECT count FROM monthly_counts WHERE user_id = ?), 0) + 1)",
+        (user_id, username, user_id)
+    )
+
+    conn.commit()
+    conn.close()
+
+def get_rank_and_count(table_name, user_id):
+    conn = sqlite3.connect('bot_data.db')
+    cursor = conn.cursor()
+    
+    cursor.execute(f"SELECT count FROM {table_name} WHERE user_id = ?", (user_id,))
+    user_count = cursor.fetchone()
+    if not user_count:
+        conn.close()
+        return 0, 0
+    
+    cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE count > ?", (user_count[0],))
+    rank = cursor.fetchone()[0] + 1
+    
+    conn.close()
+    return user_count[0], rank
+
+def get_top_users(table_name, limit=5):
+    conn = sqlite3.connect('bot_data.db')
+    cursor = conn.cursor()
+    
+    cursor.execute(f"SELECT username, count FROM {table_name} ORDER BY count DESC LIMIT ?", (limit,))
+    top_users = cursor.fetchall()
+    
+    conn.close()
+    return top_users
+
 #==============================================================
-# قسم معالجات الأوامر والرسائل
+# قسم معالجات الأوامر (الإدارية)
 #==============================================================
 
-# تم إزالة معالج /start للتركيز على المجموعة فقط.
+async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """يضيف المجموعة الحالية إلى قائمة المجموعات المسموح بها (مخصص للمالك)."""
+    
+    user_id = update.message.from_user.id
+    
+    # 1. التحقق من أن المستخدم هو المالك
+    if user_id != OWNER_ID:
+        await update.message.reply_text("عذراً، هذا الأمر متاح فقط لمالك البوت.")
+        return
+        
+    chat_id = update.message.chat_id
+    
+    # 2. التحقق من أنه أمر في مجموعة أو قناة خارقة (وليس خاص)
+    if update.effective_chat.type not in [telegram.constants.ChatType.GROUP, telegram.constants.ChatType.SUPERGROUP]:
+        await update.message.reply_text("يجب استخدام هذا الأمر داخل المجموعة التي تريد تفعيل البوت فيها.")
+        return
+        
+    # 3. محاولة إضافة المجموعة
+    if add_allowed_group(chat_id):
+        await update.message.reply_text(f"تم تفعيل البوت بنجاح في هذه المجموعة!\n(Chat ID: <code>{chat_id}</code>)", parse_mode='HTML')
+        logger.info(f"تم إضافة مجموعة جديدة بنجاح: {chat_id}")
+    else:
+        await update.message.reply_text(f"البوت مُفعل بالفعل في هذه المجموعة (Chat ID: <code>{chat_id}</code>).", parse_mode='HTML')
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """معالج الرسائل النصية لحسابها (يعمل فقط في المجموعة المسموح بها)."""
+    """معالج الرسائل النصية لحسابها (مُقيد)."""
     if not update.message or not update.message.from_user:
         return
     
-    # الشرط الإضافي: تجاهل الرسالة إذا لم يكن الـ Chat ID هو المسموح به
-    # هذا الفحص قد يكون مكرراً إذا تم تطبيق فلتر Chat() في الأسفل، لكنه يضيف طبقة أمان داخل الدالة.
-    if update.message.chat_id != ALLOWED_GROUP_ID:
+    # ****** الجديد: التحقق من أن المجموعة مسموح بها ******
+    if not is_group_allowed(update.message.chat_id):
         return
-
-    # يتم استدعاء reset_counts مع كل رسالة
+        
+    # بقية منطق العد...
     reset_counts()
     
     user_id = update.message.from_user.id
@@ -182,10 +228,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     update_counts(user_id, html.escape(username))
     
 
+async def private_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """يعالج الأوامر والرسائل في المحادثات الخاصة (يمنع الإحصائيات)."""
+    # أي رسالة أو أمر في الخاص لا يفعل الإحصائيات أو العداد
+    await update.message.reply_text("عذراً، هذا البوت مخصص لمجموعة محددة، ولا يقوم بحساب أو عرض الإحصائيات في المحادثات الخاصة.")
+
+# بقية معالجات الإحصائيات (my_total_rank, my_weekly_rank, my_monthly_rank, top_ranks)
+# تبقى كما هي، لكنها الآن سيتم تقييدها باستخدام الفلاتر في main()
+
 async def my_total_rank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """معالج لعرض العدد والترتيب الكلي."""
-    # يجب أن يتم التأكد من أن هذا الأمر يعمل فقط في المجموعة المسموح بها
-    # الفلتر في دالة main يضمن ذلك
     user_id = update.message.from_user.id
     count, rank = get_rank_and_count('general_counts', user_id) 
     if count == 0:
@@ -195,7 +246,6 @@ async def my_total_rank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def my_weekly_rank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """معالج أمر /my_weekly_rank."""
     user_id = update.message.from_user.id
     count, rank = get_rank_and_count('weekly_counts', user_id)
     if count == 0:
@@ -204,7 +254,6 @@ async def my_weekly_rank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"عدد رسائلك لهذا الأسبوع: <b>{count}</b>\nترتيبك: <b>{rank}</b>", parse_mode='HTML')
 
 async def my_monthly_rank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """معالج أمر /my_monthly_rank."""
     user_id = update.message.from_user.id
     count, rank = get_rank_and_count('monthly_counts', user_id)
     if count == 0:
@@ -213,16 +262,10 @@ async def my_monthly_rank(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(f"عدد رسائلك لهذا الشهر: <b>{count}</b>\nترتيبك: <b>{rank}</b>", parse_mode='HTML')
         
 async def top_ranks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """معالج عام لأوامر التوب (يعمل فقط في المجموعة وللمشرفين)."""
-    # الفلتر في دالة main يضمن عمله في المجموعة المحددة
-    
     command = update.message.text.split()[0]
     chat_id = update.message.chat_id
     user_id = update.message.from_user.id
     
-    # بما أننا قمنا بتقييد الأمر للمجموعة المسموح بها فقط، لم نعد بحاجة لفحص نوع الشات.
-    
-    # التحقق من صلاحيات المشرف
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status not in [telegram.constants.ChatMemberStatus.ADMINISTRATOR, telegram.constants.ChatMemberStatus.OWNER]:
@@ -267,53 +310,54 @@ async def top_ranks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def main():
     """الدالة الرئيسية لتشغيل البوت."""
-    if not BOT_TOKEN or not ALLOWED_GROUP_ID:
-        logger.error("لم يتم العثور على رمز البوت أو هوية المجموعة المسموح بها. يرجى التحقق من ملف .env")
+    if not BOT_TOKEN or OWNER_ID is None:
+        logger.error("لم يتم العثور على رمز البوت أو معرف المالك (OWNER_ID). يرجى التحقق من ملف .env")
         return
         
     init_db()
 
     application = ApplicationBuilder().token(BOT_TOKEN).read_timeout(10).write_timeout(10).build()
-
-    # ****** تطبيق الفلتر على جميع المعالجات ******
-    # نستخدم filters.Chat(chat_id=ALLOWED_GROUP_ID) لضمان أن جميع الإحصائيات 
-    # وأوامر العد تعمل فقط داخل تلك المجموعة.
-
-    allowed_chat_filter = filters.Chat(chat_id=ALLOWED_GROUP_ID)
     
-    # معالجات الأوامر الفردية (تبدأ بـ /) - مقتصرة على المجموعة
-    application.add_handler(CommandHandler("my_weekly_rank", my_weekly_rank, filters=allowed_chat_filter))
-    application.add_handler(CommandHandler("my_monthly_rank", my_monthly_rank, filters=allowed_chat_filter))
+    # -----------------------------------------------
+    # 1. معالج الأوامر الإدارية (لإضافة المجموعات)
+    # -----------------------------------------------
+    # هذا الأمر لا يحتاج لفلتر المجموعة لأنه يستخدم لإضافة المجموعة نفسها!
+    application.add_handler(CommandHandler("add_group", add_group))
     
-    # معالج "رسايلي" كنص عادي - مقتصر على المجموعة
+    # -----------------------------------------------
+    # 2. معالج المحادثات الخاصة (لتعطيل الإحصائيات في الخاص)
+    # -----------------------------------------------
+    # جميع الأوامر التي لم يتم معالجتها من قبل في المحادثات الخاصة ستنتقل إلى هنا
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE, private_chat_handler))
+
+    # -----------------------------------------------
+    # 3. معالجات المجموعات المسموح بها
+    # -----------------------------------------------
+    
+    # الفلتر الجديد: يمرر الرسالة فقط إذا كانت المجموعة مسموح بها
+    allowed_group_filter = filters.Chat(is_group_allowed) 
+
+    # معالجات الأوامر الفردية
+    application.add_handler(CommandHandler("my_weekly_rank", my_weekly_rank, filters=allowed_group_filter))
+    application.add_handler(CommandHandler("my_monthly_rank", my_monthly_rank, filters=allowed_group_filter))
+    
+    # معالج "رسايلي" كنص عادي
     application.add_handler(MessageHandler(
-        allowed_chat_filter & filters.TEXT & filters.Regex(r'^رسايلي$'), 
+        allowed_group_filter & filters.TEXT & filters.Regex(r'^رسايلي$'), 
         my_total_rank
     ))
     
-    # معالج الأمر الرسمي /total_messages - مقتصر على المجموعة
-    application.add_handler(CommandHandler("total_messages", my_total_rank, filters=allowed_chat_filter)) 
+    # معالج الأمر الرسمي /total_messages
+    application.add_handler(CommandHandler("total_messages", my_total_rank, filters=allowed_group_filter)) 
 
-    # معالجات أوامر التوب العامة - مقتصرة على المجموعة
-    application.add_handler(CommandHandler("top5_weekly", top_ranks, filters=allowed_chat_filter))
-    application.add_handler(CommandHandler("top5_monthly", top_ranks, filters=allowed_chat_filter))
-    application.add_handler(CommandHandler("top20_weekly", top_ranks, filters=allowed_chat_filter))
-    application.add_handler(CommandHandler("top20_monthly", top_ranks, filters=allowed_chat_filter))
+    # معالجات أوامر التوب العامة
+    application.add_handler(CommandHandler("top5_weekly", top_ranks, filters=allowed_group_filter))
+    application.add_handler(CommandHandler("top5_monthly", top_ranks, filters=allowed_group_filter))
+    application.add_handler(CommandHandler("top20_weekly", top_ranks, filters=allowed_group_filter))
+    application.add_handler(CommandHandler("top20_monthly", top_ranks, filters=allowed_group_filter))
 
-    # معالج لجميع الرسائل النصية التي ليست أوامر - مقتصر على المجموعة
-    # هذا هو المعالج الذي يقوم بالعد.
-    application.add_handler(MessageHandler(allowed_chat_filter & filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # ملاحظة حول المحادثات الخاصة:
-    # بما أن جميع معالجات الإحصائيات والعد مُقيدة بـ allowed_chat_filter،
-    # فإن أي رسالة أو أمر إحصائي يُرسل في محادثة خاصة سيتم تجاهله ببساطة، 
-    # مما يحقق متطلب عدم ظهور الإحصائيات في الخاص.
-    
-    # يمكنك إضافة معالج بسيط لأوامر البداية في الخاص لإعلام المستخدمين:
-    async def private_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text("عذراً، هذا البوت مخصص لمجموعة محددة، ولا يقوم بحساب أو عرض الإحصائيات في المحادثات الخاصة.")
-        
-    application.add_handler(CommandHandler("start", private_start, filters=filters.ChatType.PRIVATE))
+    # معالج لجميع الرسائل النصية التي ليست أوامر (العد الفعلي) - مقتصر على المجموعات المسموح بها
+    application.add_handler(MessageHandler(allowed_group_filter & filters.TEXT & ~filters.COMMAND, handle_message))
 
     # بدء تشغيل البوت عبر الاستقصاء (Polling)
     application.run_polling()
