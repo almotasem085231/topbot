@@ -9,19 +9,10 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 import re 
 
-# قم بتحميل متغيرات البيئة من ملف .env
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID") 
+#==============================================================
+# قسم إعداد التسجيل (تم نقله إلى الأعلى)
+#==============================================================
 
-# تحويل الـ OWNER_ID إلى عدد صحيح
-try:
-    OWNER_ID = int(OWNER_ID)
-except (ValueError, TypeError):
-    logger.error("OWNER_ID غير صالح. يرجى التحقق من ملف .env.")
-    OWNER_ID = None
-
-# إعداد التسجيل
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -29,15 +20,35 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 #==============================================================
-# قسم قاعدة البيانات
+# قسم تهيئة المتغيرات (مُعدَّل للتعامل مع OWNER_ID المفقود)
+#==============================================================
+
+# قم بتحميل متغيرات البيئة من ملف .env
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_ID") 
+
+# تحويل الـ OWNER_ID إلى عدد صحيح مع التعامل مع الأخطاء
+try:
+    # سيتم تنفيذ هذا السطر إذا كانت قيمة OWNER_ID موجودة كـ string
+    OWNER_ID = int(OWNER_ID)
+except (ValueError, TypeError):
+    # سيتم تنفيذ هذه الكتلة إذا كانت قيمة OWNER_ID هي None (غير موجودة في .env)
+    # أو إذا كانت القيمة الموجودة ليست رقمًا صحيحًا
+    logger.error("OWNER_ID غير صالح أو مفقود. يرجى التأكد من إضافة OWNER_ID=\"YOUR_TELEGRAM_USER_ID\" في ملف .env.")
+    OWNER_ID = None
+
+#==============================================================
+# بقية الكود (بدون تغيير)
 #==============================================================
 
 def init_db():
     """يهيئ قاعدة البيانات وينشئ الجداول."""
+    # ... (بقية الدالة init_db)
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
     
-    # جدول العدادات... (بدون تغيير)
+    # جداول العدادات
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS general_counts (
             user_id INTEGER PRIMARY KEY,
@@ -66,7 +77,7 @@ def init_db():
         )
     """)
     
-    # ****** الجديد: جدول لتخزين معرفات المجموعات المسموح بها ******
+    # جدول المجموعات المسموح بها
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS allowed_groups (
             chat_id INTEGER PRIMARY KEY
@@ -75,6 +86,8 @@ def init_db():
     
     conn.commit()
     conn.close()
+
+# ... (بقية دوال قاعدة البيانات)
 
 def is_group_allowed(chat_id):
     """يتحقق مما إذا كانت المجموعة مسموحاً بها في قاعدة البيانات."""
@@ -92,15 +105,10 @@ def add_allowed_group(chat_id):
     try:
         cursor.execute("INSERT OR IGNORE INTO allowed_groups (chat_id) VALUES (?)", (chat_id,))
         conn.commit()
-        return cursor.rowcount > 0 # تعود True إذا تمت الإضافة، False إذا كانت موجودة
+        return cursor.rowcount > 0 
     finally:
         conn.close()
 
-# الدوال الأخرى (update_counts, get_rank_and_count, get_top_users, reset_counts)
-# تبقى كما هي بدون تغيير، لكن تم حذفها هنا للاختصار.
-# (يجب الإبقاء على الدوال في الكود الكامل لديك)
-
-# الدالة reset_counts (مُعدلة للأحد - 6)
 def reset_counts():
     """
     يتحقق من التاريخ لإعادة ضبط العدادات الأسبوعية (الأحد) والشهرية (اليوم الأول).
@@ -178,28 +186,23 @@ def get_top_users(table_name, limit=5):
     conn.close()
     return top_users
 
-#==============================================================
-# قسم معالجات الأوامر (الإدارية)
-#==============================================================
+# ... (بقية معالجات الأوامر)
 
 async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """يضيف المجموعة الحالية إلى قائمة المجموعات المسموح بها (مخصص للمالك)."""
     
     user_id = update.message.from_user.id
     
-    # 1. التحقق من أن المستخدم هو المالك
     if user_id != OWNER_ID:
         await update.message.reply_text("عذراً، هذا الأمر متاح فقط لمالك البوت.")
         return
         
     chat_id = update.message.chat_id
     
-    # 2. التحقق من أنه أمر في مجموعة أو قناة خارقة (وليس خاص)
     if update.effective_chat.type not in [telegram.constants.ChatType.GROUP, telegram.constants.ChatType.SUPERGROUP]:
         await update.message.reply_text("يجب استخدام هذا الأمر داخل المجموعة التي تريد تفعيل البوت فيها.")
         return
         
-    # 3. محاولة إضافة المجموعة
     if add_allowed_group(chat_id):
         await update.message.reply_text(f"تم تفعيل البوت بنجاح في هذه المجموعة!\n(Chat ID: <code>{chat_id}</code>)", parse_mode='HTML')
         logger.info(f"تم إضافة مجموعة جديدة بنجاح: {chat_id}")
@@ -212,11 +215,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.message or not update.message.from_user:
         return
     
-    # ****** الجديد: التحقق من أن المجموعة مسموح بها ******
     if not is_group_allowed(update.message.chat_id):
         return
         
-    # بقية منطق العد...
     reset_counts()
     
     user_id = update.message.from_user.id
@@ -230,11 +231,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def private_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """يعالج الأوامر والرسائل في المحادثات الخاصة (يمنع الإحصائيات)."""
-    # أي رسالة أو أمر في الخاص لا يفعل الإحصائيات أو العداد
     await update.message.reply_text("عذراً، هذا البوت مخصص لمجموعة محددة، ولا يقوم بحساب أو عرض الإحصائيات في المحادثات الخاصة.")
-
-# بقية معالجات الإحصائيات (my_total_rank, my_weekly_rank, my_monthly_rank, top_ranks)
-# تبقى كما هي، لكنها الآن سيتم تقييدها باستخدام الفلاتر في main()
 
 async def my_total_rank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
@@ -304,14 +301,11 @@ async def top_ranks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(message_text, parse_mode='HTML')
 
 
-#==============================================================
-# قسم التطبيق الرئيسي
-#==============================================================
-
 def main():
     """الدالة الرئيسية لتشغيل البوت."""
+    # التحقق من أن المتغيرات الأساسية موجودة بعد معالجة الأخطاء
     if not BOT_TOKEN or OWNER_ID is None:
-        logger.error("لم يتم العثور على رمز البوت أو معرف المالك (OWNER_ID). يرجى التحقق من ملف .env")
+        logger.error("خطأ حرج: البوت لا يمكنه العمل بدون رمز البوت أو معرف المالك الصحيح.")
         return
         
     init_db()
@@ -321,20 +315,17 @@ def main():
     # -----------------------------------------------
     # 1. معالج الأوامر الإدارية (لإضافة المجموعات)
     # -----------------------------------------------
-    # هذا الأمر لا يحتاج لفلتر المجموعة لأنه يستخدم لإضافة المجموعة نفسها!
     application.add_handler(CommandHandler("add_group", add_group))
     
     # -----------------------------------------------
     # 2. معالج المحادثات الخاصة (لتعطيل الإحصائيات في الخاص)
     # -----------------------------------------------
-    # جميع الأوامر التي لم يتم معالجتها من قبل في المحادثات الخاصة ستنتقل إلى هنا
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE, private_chat_handler))
 
     # -----------------------------------------------
-    # 3. معالجات المجموعات المسموح بها
+    # 3. معالجات المجموعات المسموح بها (تعتمد على is_group_allowed)
     # -----------------------------------------------
     
-    # الفلتر الجديد: يمرر الرسالة فقط إذا كانت المجموعة مسموح بها
     allowed_group_filter = filters.Chat(is_group_allowed) 
 
     # معالجات الأوامر الفردية
@@ -356,10 +347,9 @@ def main():
     application.add_handler(CommandHandler("top20_weekly", top_ranks, filters=allowed_group_filter))
     application.add_handler(CommandHandler("top20_monthly", top_ranks, filters=allowed_group_filter))
 
-    # معالج لجميع الرسائل النصية التي ليست أوامر (العد الفعلي) - مقتصر على المجموعات المسموح بها
+    # معالج لجميع الرسائل النصية التي ليست أوامر (العد الفعلي)
     application.add_handler(MessageHandler(allowed_group_filter & filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # بدء تشغيل البوت عبر الاستقصاء (Polling)
     application.run_polling()
 
 if __name__ == '__main__':
